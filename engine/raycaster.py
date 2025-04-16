@@ -1,47 +1,64 @@
-# engine/raycaster.py
 import math
 import pygame
+import numpy as np
 from engine.map import GAME_MAP, TILE_SIZE, MAP_WIDTH, MAP_HEIGHT
+from engine.constants import WIDTH, HEIGHT
 
-# Configuration for raycasting
-FOV = math.pi / 3  # 60° field of view
-NUM_RAYS = 800  # This might equal your window width (if each ray corresponds to one pixel)
-MAX_DEPTH = 20  # Maximum number of tiles to search
+wall_texture = None
+texture_width = None
+texture_height = None
+
+FOV = math.pi / 3  # 60°
+NUM_RAYS = 800
+MAX_DEPTH = 20
 DELTA_ANGLE = FOV / NUM_RAYS
-SCALE = 800 // NUM_RAYS  # Adjust depending on window dimensions
+SCALE = WIDTH // NUM_RAYS
+d_proj = (WIDTH / 2) / math.tan(FOV / 2)
 
-def cast_rays(screen, player):
-    """
-    Cast rays from the player's position and render vertical slices of wall.
-    """
-    start_angle = player.angle - FOV / 2
+# Store wall distances for sprite occlusion
+wall_distances = np.zeros(NUM_RAYS)
 
+def init_textures():
+    global wall_texture, texture_width, texture_height
+    if wall_texture is None:
+        wall_texture = pygame.image.load("assets/images/wall.png").convert()
+        texture_width = wall_texture.get_width()
+        texture_height = wall_texture.get_height()
+
+def cast_rays(screen, player, baseline):
+    init_textures()
+    start_angle = player.angle - FOV/2
+    
+    # Pre-calculate sin and cos for all rays
+    ray_angles = np.arange(NUM_RAYS) * DELTA_ANGLE + start_angle
+    sin_a = np.sin(ray_angles)
+    cos_a = np.cos(ray_angles)
+    
     for ray in range(NUM_RAYS):
-        current_angle = start_angle + ray * DELTA_ANGLE
-        sin_a = math.sin(current_angle)
-        cos_a = math.cos(current_angle)
+        current_sin = sin_a[ray]
+        current_cos = cos_a[ray]
         
         for depth in range(1, MAX_DEPTH * TILE_SIZE):
-            target_x = player.x + depth * cos_a
-            target_y = player.y + depth * sin_a
-
+            target_x = player.x + depth * current_cos
+            target_y = player.y + depth * current_sin
             map_x = int(target_x // TILE_SIZE)
             map_y = int(target_y // TILE_SIZE)
-
-            # Ensure within map boundaries
+            
             if map_x < 0 or map_x >= MAP_WIDTH or map_y < 0 or map_y >= MAP_HEIGHT:
                 break
-
-            # Check if wall is hit (assuming non-zero values in GAME_MAP are walls)
+                
             if GAME_MAP[map_y][map_x]:
-                # Correct fisheye effect:
-                depth *= math.cos(player.angle - current_angle)
-                # Calculate wall slice height (the constant factor is chosen by trial)
-                wall_height = (TILE_SIZE * 277) / (depth + 0.0001)
-                # Determine color intensity based on depth:
-                color_intensity = max(0, 255 - int(depth * 0.5))
-                color = (color_intensity, color_intensity, color_intensity)
-                # Draw vertical slice:
+                depth_corrected = depth * math.cos(player.angle - ray_angles[ray])
+                wall_distances[ray] = depth_corrected
+                lineHeight = (TILE_SIZE / (depth_corrected + 0.0001)) * d_proj
+                
+                hit_offset = target_x % TILE_SIZE
+                texture_x = int((hit_offset / TILE_SIZE) * texture_width)
+                texture_x = min(texture_x, texture_width - 1)
+                
+                wall_slice = wall_texture.subsurface((texture_x, 0, 1, texture_height))
+                wall_slice_scaled = pygame.transform.scale(wall_slice, (SCALE, int(lineHeight)))
+                drawStart = int(baseline - (lineHeight/2))
                 column_position = ray * SCALE
-                pygame.draw.rect(screen, color, (column_position, (600 // 2) - wall_height // 2, SCALE, wall_height))
+                screen.blit(wall_slice_scaled, (column_position, drawStart))
                 break
